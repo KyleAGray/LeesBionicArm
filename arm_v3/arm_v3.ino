@@ -1,3 +1,29 @@
+/*
+ * EMG based servo motor control for actuating a prosthetic hand  
+ * 
+ * Authors: Kyle Gray, Jack Christie
+ * 
+ * Designed for use with 2 Myoware EMG sensor and XYZ robot servo motor A1-16
+ * 
+ * Top sensor should be placed near the flexor carpi ulnaris muscles and the
+ * bottom sensor should be placed near the brachioradialis muscle for best results
+ * 
+ * XYZ robot servo library and documentation available at: 
+ *  https://github.com/pololu/xyzrobot-servo-arduino
+ * 
+ * This specific arm requires exactly 4 revolutions of the motor to move
+ * from closed to open or vise versa
+ * 
+ * Notes:
+ *  The Myoware sensors initially read in bad values when first powered on
+ *  make sure those are not used
+ *  
+ *  The servo can only read 330 degrees worth of positions ranging between
+ *  0 and 1023. For the other 80 degrees, bad values will be read e.g.
+ *  lower than 0 or higher than 1023. These values should also be ignored
+ *  and a base starting point should be chosen away from this dead zone
+ *  such as 500.
+  */
 #include <XYZrobotServo.h>
 
 // On boards with a hardware serial port available for use, use
@@ -14,7 +40,8 @@ SoftwareSerial servoSerial(10, 11);
 // Max Revolutions
 #define REVMAX  4
 
-// Kyle's Arm Values 125, 400
+// Kyle's Arm Values to reduce sensitivity increase values
+// or vise versa for increasing sensitivity
 #define CLOSE_THRESH 200
 #define OPEN_THRESH 600
 
@@ -36,10 +63,13 @@ uint16_t prevPos = 500;
 */
 int rev = 0;
 
+/// set the hand to open position
 bool SetHandOpen = true;
+/// set the hand to close position
 bool SetHandClosed = false;
-
+/// Did the hand just begin an opening movement
 bool openstart = true;
+/// Did the hand just begin a closing movement
 bool closestart = true;
 
 /// Is hand actively opening
@@ -47,8 +77,11 @@ bool opening = false;
 /// Is hand actively closing
 bool closing = false;
 
+/// Should the revolutions be incremented
 bool inc = false;
+/// Should the revolutions be decremented
 bool dec = false;
+
 // Set up a servo object, specifying what serial port to use and
 // what ID number to use.
 XYZrobotServo servo(servoSerial, 1);
@@ -66,7 +99,8 @@ void setup()
   // Allow motor time to get to start position
 
 
-  // Set up power for sensor
+  // Set up power for second sensor
+  // One sensor can use 5V pin
   pinMode(13, OUTPUT);
   digitalWrite(13, HIGH);
 
@@ -76,18 +110,23 @@ void loop()
 {
   int top = analogRead(0); // Sensor on top of arm
   int bottom = analogRead(1); // Sensor in bottom of arm
-  //used for screwing on lead screw
-//      while (1)
-//      {
-//        servo.setSpeed(200);
-//      }
-  startup();
-  // Dont want to call startup again
+  
+  // Used for screwing/unscrewing lead screw
+  //      while (1)
+  //      {
+  //        servo.setSpeed(200);
+  //      }
 
+  // Needed to ignore initial values from sensors which are invalid
+  startup();
+  
+  // Dont want to call startup again
   while (1)
   {
     int top = analogRead(0); // Sensor on top of arm
     int bottom = analogRead(2); // Sensor in bottom of arm
+    
+    // Helpful for determining threshold values
     //    Serial.print(top);
     //    Serial.print(" ");
     //    Serial.print(bottom);
@@ -102,10 +141,10 @@ void loop()
       SetHandClosed = false;
       //Serial.println("OPEN TRIGGERED");
     }
+    
     // Closing hand detected
     else if ( bottom > CLOSE_THRESH)
     {
-
       SetHandClosed = true;
       SetHandOpen = false;
       //Serial.println("CLOSE TRIGGERED");
@@ -116,20 +155,24 @@ void loop()
       // Alow the user to stop arm mid-movement
       if (closing)
       {
-        Serial.println("stop closeing");
-        //rev++;
-
+        //Serial.println("stop closeing");
+        
         servo.setSpeed(0);
-
-        delay(30);
+        delay(30); // Give time to stop
         pos = servo.readPosition();
+        
+        // Have we completed a revolution since the last time checked
         if (pos >= 500 && prevPos < 500
             && valid(pos, prevPos))
         {
           rev++;
-          Serial.println("completed close revolution");
-          PrintPos();
+          //Serial.println("completed close revolution");
+          //PrintPos();
         }
+        
+        // If we go from half closed the opening, and we did not
+        // complete exactly a full revolution- which is take care of
+        // above- an extra revalution needs to be added 
         if (pos != 500)
         {
           inc = true;
@@ -141,14 +184,18 @@ void loop()
         SetHandClosed = false;
         SetHandOpen = false;
 
-        delay(970);
+        // Ignore next bit of signals which will likely have many values
+        // above the opening threshold
+        delay(970); 
       }
+      
       else
       {
+        
         if ( inc)
         {
           rev++;
-          Serial.println("inc");
+          //Serial.println("inc");
         }
         dec = false;
         inc = false;
@@ -161,12 +208,10 @@ void loop()
 
       if (opening)
       {
-        Serial.println("stop opening");
-        //rev--;
-
+        //Serial.println("stop opening");
         servo.setSpeed(0);
 
-        delay(30);
+        delay(30); // allow time to stop
         pos = servo.readPosition();
 
         // If we have since completed a revolution
@@ -174,8 +219,8 @@ void loop()
             && valid(pos, prevPos))
         {
           rev--;
-          Serial.println("completed open revolution");
-          PrintPos();
+          //Serial.println("completed open revolution");
+          //PrintPos();
 
         }
 
@@ -192,7 +237,7 @@ void loop()
         SetHandClosed = false;
 
         prevPos = pos;
-        delay(970);
+        delay(970); // future closing signal temporarily ignored
 
       }
       else
@@ -200,7 +245,7 @@ void loop()
         if (dec)
         {
           rev--;
-          Serial.println("dec");
+          //Serial.println("dec");
         }
         inc = false;
         dec = false;
@@ -216,11 +261,15 @@ void loop()
 void OpenHand()
 {
 
-
+  if (rev <= 0)
+  {
+    // should already be stopped, skip the delay
+    return;
+  }
   // Just begining to open
   if (openstart)
   {
-    Serial.println("open start");
+    //Serial.println("open start");
     openstart = false;
     opening = true;
 
@@ -230,12 +279,13 @@ void OpenHand()
          && valid(pos, prevPos) )
     {
       rev++;
-      Serial.println("add revolution");
+      //Serial.println("add revolution");
     }
 
     prevPos = pos;
 
-
+    servo.setSpeed(-MAXSPEED);
+    delay(100); // Give time for motor to get up to speed
   }
 
   if (rev <= 0)
@@ -243,38 +293,31 @@ void OpenHand()
     opening = false;
     closing = false;
     servo.setSpeed(0);
-    delay(30);
+    delay(30); // give time to stop
     return;
   }
-
-  else
-  {
-    servo.setSpeed(-MAXSPEED);
-  }
-  delay(30);
+  
+  delay(30); // allow time for motor to move since last reading
   pos = servo.readPosition();
 
+  // Has a revolution completed
   if (pos <= 500 && prevPos > 500
       && valid(pos, prevPos))
   {
     rev--;
-    Serial.println("completed open revolution");
-    PrintPos();
+    //Serial.println("completed open revolution");
+    //PrintPos();
 
   }
 
+  // All the way open
   if (rev == 0)
   {
     servo.setSpeed(0);
     opening = false;
-
-    // more than likely we've overshot (hopefully by a position or two)
-    //    while (servo.readPosition() != 500)
-    //    {
-    //      servo.setPosition(500);
-    //      delay(10);
-    //    }
-    servo.setPosition(500);
+    
+    servo.setPosition(500); // maintain a standard start point
+    // Quickly changing motor direction can cause problems, this delay avoids those
     delay(1000);
     pos = servo.readPosition();
 
@@ -288,7 +331,12 @@ void OpenHand()
 
 void CloseHand()
 {
-
+  if (rev >= 4)
+  {
+    // should already be stopped, skip the delay
+    return;
+  }
+  
   // Just begining to open
   if (closestart)
   {
@@ -302,14 +350,19 @@ void CloseHand()
          && valid(pos, prevPos))
     {
       rev--;
-      Serial.println("remove revolution");
+      //Serial.println("remove revolution");
     }
 
 
     prevPos = pos;
-    Serial.println("close start");
-
+    servo.setSpeed(MAXSPEED);
+    delay(100); // Give time for motor to get up to speed
+    
+    //Serial.println("close start");
+    
   }
+  
+  // All the way closed
   if (rev >= 4)
   {
     opening = false;
@@ -319,32 +372,27 @@ void CloseHand()
     return;
 
   }
-  else
-  {
-    servo.setSpeed(MAXSPEED);
-  }
 
   delay(30);
   pos = servo.readPosition();
+
+  // Has revolution completed
   if (pos >= 500 && prevPos < 500
       && valid(pos, prevPos))
   {
     rev++;
-    Serial.println("completed close revolution");
-    PrintPos();
+    //Serial.println("completed close revolution");
+    //PrintPos();
   }
+  
+  // All the way closed
   if (rev == 4)
   {
     servo.setSpeed(0);
     closing = false;
-    // We've overshot (hopefully by a position or two)
-    //    while (servo.readPosition() != 500)
-    //    {
-    //      servo.setPosition(500);
-    //      delay(10);
-    //    }
 
-    servo.setPosition(500);
+    servo.setPosition(500); // maintain a standard start point
+    // Quickly changing motor direction can cause problems, this delay avoids those
     delay(1000);
     pos = servo.readPosition();
   }
@@ -354,7 +402,7 @@ void CloseHand()
 }
 
 /*
-   Called at inial start up, is required because analog read
+   Called at inial start up, is required because sensors
    initially reads in garbage values, this allows us to skip those
 */
 void startup()
@@ -370,7 +418,7 @@ void startup()
 }
 
 /*
-   Print position information
+   Print position information, useful for debugging
 */
 void PrintPos()
 {
@@ -380,8 +428,25 @@ void PrintPos()
   Serial.print("\n");
 }
 
-bool valid(int value1, int value2 )
+/*
+ *  Return if two motor position values are considered valid.
+ *  
+ *  First it checks that they are within the range of readable
+ *  values for the servo. 
+ *  
+ *  Next it checks if the they are far enough away from each other. 
+ *  Occasionally the motor does not read the value correctly and cause 
+ *  the revolutions to inc/dec prematurely. This always occurs when the 
+ *  two positions are read to be very close to each other. With the delays
+ *  in place, the motor previous and current motor posions should not be very 
+ *  close.
+ */
+bool valid(int pos1, int pos2 )
 {
-  return value1 <= 1023 && value1 >= 0 && value2 <= 1023 && value2 >= 0 && abs(value1 - value2) > 10;
+  return pos1 <= 1023 && pos1 >= 0 && pos2 <= 1023 && pos2 >= 0 && abs(pos1 - pos2) > 10;
 }
+
+
+
+
 
